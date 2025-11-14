@@ -1,5 +1,4 @@
-
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Doughnut, Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -11,25 +10,82 @@ import {
   PointElement,
   LineElement
 } from 'chart.js';
+import { ordersAPI } from '../../api/orders';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement);
 
 export default function OrdersOverview() {
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetchAnalytics();
+  }, []);
+
+  const fetchAnalytics = async () => {
+    try {
+      setLoading(true);
+      const response = await ordersAPI.getOrderAnalytics(7);
+      setAnalyticsData(response.data);
+      setError(null);
+    } catch (err) {
+      setError('Failed to fetch analytics data');
+      console.error('Analytics fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="right-column">
+        <div className="card">
+          <div style={{ textAlign: 'center', padding: '50px' }}>
+            Loading analytics...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="right-column">
+        <div className="card">
+          <div style={{ textAlign: 'center', padding: '50px', color: 'red' }}>
+            {error}
+            <button onClick={fetchAnalytics} style={{ display: 'block', margin: '10px auto' }}>
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Process time-based data
+  const timeRanges = {
+    Morning: '6–12 AM',
+    Afternoon: '12–6 PM',
+    Evening: '6–12 PM',
+    Night: '12–6 AM'
+  };
+
+  const timeData = analyticsData?.ordersByTime || [];
+  const timeLabels = timeData.map(item => item._id);
+  const timeValues = timeData.map(item => item.count);
+  const timeColors = ['#7C5CFC', '#A89CFF', '#C5C1FF', '#E5E1FF'];
+
   const donutData = {
-    labels: ['Afternoon', 'Evening', 'Morning'],
+    labels: timeLabels,
     datasets: [
       {
-        data: [480, 384, 336], // absolute orders instead of percentages
-        backgroundColor: ['#7C5CFC', '#A89CFF', '#C5C1FF'],
+        data: timeValues,
+        backgroundColor: timeColors.slice(0, timeLabels.length),
         borderWidth: 0,
       },
     ],
-  };
-
-  const timeRanges = {
-    Afternoon: '1–6 PM',
-    Evening: '6–11 PM',
-    Morning: '6–11 AM',
   };
 
   const donutOptions = {
@@ -41,7 +97,7 @@ export default function OrdersOverview() {
             const label = context.label || '';
             const value = context.raw;
             const time = timeRanges[label] || '';
-            return `${label} (${time}): ${value} `;
+            return `${label} (${time}): ${value} orders`;
           },
           title: function () {
             return '';
@@ -53,12 +109,23 @@ export default function OrdersOverview() {
     },
   };
 
+  // Process daily orders data
+  const dailyData = analyticsData?.dailyOrders || [];
+  const dailyLabels = dailyData.map(item => {
+    const date = new Date(item._id);
+    return date.getDate().toString().padStart(2, '0');
+  });
+  const dailyValues = dailyData.map(item => item.count);
+
+  // Create previous week comparison data (mock for now)
+  const previousWeekData = dailyValues.map(val => val * 0.9); // 10% less for demo
+
   const lineData = {
-    labels: ['01', '02', '03', '04', '05', '06'],
+    labels: dailyLabels.length > 0 ? dailyLabels : ['01', '02', '03', '04', '05', '06'],
     datasets: [
       {
-        label: 'Last 6 days',
-        data: [900, 1100, 950, 1050, 1000, 1200],
+        label: 'This Week',
+        data: dailyValues.length > 0 ? dailyValues : [0, 0, 0, 0, 0, 0],
         borderColor: '#7C5CFC',
         borderWidth: 2,
         pointRadius: 4,
@@ -68,7 +135,7 @@ export default function OrdersOverview() {
       },
       {
         label: 'Last Week',
-        data: [850, 1000, 900, 950, 980, 1100],
+        data: previousWeekData.length > 0 ? previousWeekData : [0, 0, 0, 0, 0, 0],
         borderColor: '#ddd',
         borderWidth: 2,
         pointRadius: 0,
@@ -78,6 +145,10 @@ export default function OrdersOverview() {
     ],
   };
 
+  const totalOrders = analyticsData?.totalOrders || 0;
+  const percentageChange = analyticsData?.percentageChange || 0;
+  const isPositive = percentageChange >= 0;
+
   return (
     <div className="right-column">
       {/* Order Time */}
@@ -85,18 +156,27 @@ export default function OrdersOverview() {
         <div className="card-head">
           <div>
             <h4 className="card-title">Order Time</h4>
-            <p className="card-sub">From 1–6 Dec, 2025</p>
+            <p className="card-sub">Last 7 days</p>
           </div>
-          <button className="btn btn-outline view-report-btn">View Report</button>
+          <button className="btn btn-outline view-report-btn" onClick={fetchAnalytics}>
+            Refresh
+          </button>
         </div>
         <div className="donut-wrap">
           <div className="donut big-donut">
             <Doughnut data={donutData} options={donutOptions} />
           </div>
           <ul className="legend">
-            <li><span className="dot dot-afternoon"></span>Afternoon<b>480</b></li>
-            <li><span className="dot dot-evening"></span>Evening<b>384</b></li>
-            <li><span className="dot dot-morning"></span>Morning<b>336</b></li>
+            {timeData.map((item, index) => (
+              <li key={item._id}>
+                <span 
+                  className="dot" 
+                  style={{ backgroundColor: timeColors[index] }}
+                ></span>
+                {item._id}
+                <b>{item.count}</b>
+              </li>
+            ))}
           </ul>
         </div>
       </div>
@@ -106,22 +186,33 @@ export default function OrdersOverview() {
         <div className="card-head">
           <div>
             <h4 className="card-title">Orders</h4>
-            <p className="card-sub">Sales from 1–6 Dec, 2025</p>
+            <p className="card-sub">Last 7 days comparison</p>
           </div>
-          <button className="btn btn-outline view-report-btn">View Report</button>
+          <button className="btn btn-outline view-report-btn" onClick={fetchAnalytics}>
+            Refresh
+          </button>
         </div>
         <div className="orders-figures">
-          <p className="orders-count">1200</p>
-          <span className="orders-delta down">2.1% vs last week</span>
+          <p className="orders-count">{totalOrders.toLocaleString()}</p>
+          <span className={`orders-delta ${isPositive ? 'up' : 'down'}`}>
+            {isPositive ? '+' : ''}{percentageChange}% vs last week
+          </span>
         </div>
         <div className="line-chart">
           <Line
             data={lineData}
             options={{
               plugins: {
-                legend: { display: true, position: 'bottom', labels: { usePointStyle: true, boxWidth: 6 } }
+                legend: { 
+                  display: true, 
+                  position: 'bottom', 
+                  labels: { usePointStyle: true, boxWidth: 6 } 
+                }
               },
-              scales: { y: { display: false }, x: { display: false } }
+              scales: { 
+                y: { display: false }, 
+                x: { display: false } 
+              }
             }}
           />
         </div>

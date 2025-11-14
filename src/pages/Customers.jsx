@@ -1,40 +1,92 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { FiSearch, FiEye, FiTrash2 } from "react-icons/fi";
-import { customers as customersData } from "../data/customersData";
+import { customersAPI } from "../api/customers";
 
 export default function Customers() {
-  const [customers, setCustomers] = useState(customersData);
+  const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState("");
   const [period, setPeriod] = useState("Week");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   // Pagination
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCustomers, setTotalCustomers] = useState(0);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return customers;
-    return customers.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.email.toLowerCase().includes(q) ||
-        String(c.id).includes(q)
-    );
-  }, [customers, search]);
+  // Stats state
+  const [stats, setStats] = useState({
+    totalCustomers: 0,
+    newSignups: 0,
+    returningCustomers: 0,
+    blockedCustomers: 0
+  });
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const startIdx = (page - 1) * pageSize;
-  const pageRows = filtered.slice(startIdx, startIdx + pageSize);
+  // Fetch customers from API
+  const fetchCustomers = async () => {
+    try {
+      setLoading(true);
+      const params = {
+        page,
+        limit: pageSize,
+        search: search.trim() || undefined,
+      };
 
-  useEffect(() => setPage(1), [search, pageSize]);
+      const response = await customersAPI.getAllCustomers(params);
+      
+      setCustomers(response.customers || []);
+      setTotalPages(response.totalPages || 1);
+      setTotalCustomers(response.totalCustomers || 0);
+      
+      // Calculate stats from the response
+      const customersData = response.customers || [];
+      const blockedCount = customersData.filter(c => c.status === 'Blocked').length;
+      const newCount = customersData.filter(c => c.customerType === 'New').length;
+      
+      setStats({
+        totalCustomers: response.totalCustomers || 0,
+        newSignups: newCount,
+        returningCustomers: response.totalCustomers - newCount,
+        blockedCustomers: blockedCount
+      });
+      
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+      console.error('Error fetching customers:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch data when component mounts or dependencies change
   useEffect(() => {
-    setPage((p) => (p > totalPages ? totalPages : p));
-  }, [totalPages]);
+    fetchCustomers();
+  }, [page, pageSize]);
 
-  const handleDelete = (id) => {
-    if (window.confirm("Are you sure you want to delete this customer?")) {
-      setCustomers((prev) => prev.filter((c) => c.id !== id));
+  // Handle search with debounce
+  useEffect(() => {
+    const delayedSearch = setTimeout(() => {
+      setPage(1); // Reset to first page when searching
+      fetchCustomers();
+    }, 500);
+
+    return () => clearTimeout(delayedSearch);
+  }, [search]);
+
+  // Handle customer status toggle
+  const handleToggleStatus = async (customerId) => {
+    if (window.confirm("Are you sure you want to change this customer's status?")) {
+      try {
+        await customersAPI.toggleCustomerStatus(customerId);
+        // Refresh the customers list
+        fetchCustomers();
+      } catch (err) {
+        console.error('Error toggling customer status:', err);
+        alert('Error updating customer status');
+      }
     }
   };
 
@@ -61,26 +113,45 @@ export default function Customers() {
       {/* Stats */}
       <div className="customers-stats">
         <div className="customers-stat" style={{ background: "#f3f0ff" }}>
-          <p className="customers-stat-value">10,456</p>
+          <p className="customers-stat-value">{stats.totalCustomers.toLocaleString()}</p>
           <p className="customers-stat-title">Total Customers</p>
-          <span className="customers-stat-delta">+8% from yesterday</span>
+          <span className="customers-stat-delta">Real-time data</span>
         </div>
         <div className="customers-stat" style={{ background: "#e9fbe9" }}>
-          <p className="customers-stat-value">120</p>
+          <p className="customers-stat-value">{stats.newSignups}</p>
           <p className="customers-stat-title">New Signups</p>
-          <span className="customers-stat-delta">+5% from yesterday</span>
+          <span className="customers-stat-delta">From API data</span>
         </div>
         <div className="customers-stat" style={{ background: "#fff3e6" }}>
-          <p className="customers-stat-value">6,800</p>
+          <p className="customers-stat-value">{stats.returningCustomers}</p>
           <p className="customers-stat-title">Returning Customers</p>
-          <span className="customers-stat-delta">+12% from yesterday</span>
+          <span className="customers-stat-delta">From API data</span>
         </div>
         <div className="customers-stat" style={{ background: "#ffeef2" }}>
-          <p className="customers-stat-value">15</p>
+          <p className="customers-stat-value">{stats.blockedCustomers}</p>
           <p className="customers-stat-title">Blocked Customers</p>
-          <span className="customers-stat-delta">0.5% from yesterday</span>
+          <span className="customers-stat-delta">Currently blocked</span>
         </div>
       </div>
+
+      {/* Error Message */}
+      {error && (
+        <div style={{ 
+          background: '#fee', 
+          color: '#c33', 
+          padding: '10px', 
+          borderRadius: '4px', 
+          marginBottom: '20px' 
+        }}>
+          Error: {error}
+          <button 
+            onClick={fetchCustomers} 
+            style={{ marginLeft: '10px', padding: '5px 10px' }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="customers-tools">
@@ -115,16 +186,22 @@ export default function Customers() {
 
       {/* Table */}
       <div className="card customers-card">
+        {loading && (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <p>Loading customers...</p>
+          </div>
+        )}
+        
         <table className="customers-table">
           <colgroup>
-              <col style={{ width: "120px" }} /> {/* CustomerID */}
-  <col style={{ width: "180px" }} /> {/* Customer */}
-  <col style={{ width: "220px" }} /> {/* Email */}
-  <col style={{ width: "150px" }} /> {/* Last OrderDate */}
-  <col style={{ width: "120px" }} /> {/* Total Orders */}
-  <col style={{ width: "150px" }} /> {/* Total Spends */}
-  <col style={{ width: "120px" }} /> {/* Commission */}
-  <col style={{ width: "100px" }} /> {/* Action */}
+            <col style={{ width: "120px" }} />
+            <col style={{ width: "180px" }} />
+            <col style={{ width: "220px" }} />
+            <col style={{ width: "150px" }} />
+            <col style={{ width: "120px" }} />
+            <col style={{ width: "150px" }} />
+            <col style={{ width: "120px" }} />
+            <col style={{ width: "100px" }} />
           </colgroup>
           <thead>
             <tr>
@@ -134,26 +211,39 @@ export default function Customers() {
               <th>Last OrderDate</th>
               <th>Total orders</th>
               <th>Total spends</th>
-              <th>Commission</th>
+              <th>Status</th>
               <th className="center">Action</th>
             </tr>
           </thead>
           <tbody>
-            {pageRows.length > 0 ? (
-              pageRows.map((c) => (
-                <tr key={c.id}>
-                  <td><span className="tag">#{c.id}</span></td>
-                  <td>{c.name}</td>
-                  <td className="muted">{c.email}</td>
-                  <td className="muted">{c.orders?.[0]?.date || "-"}</td>
+            {customers.length > 0 ? (
+              customers.map((c) => (
+                <tr key={c.customerId}>
+                  <td><span className="tag">#{c.customerId.slice(-6)}</span></td>
+                  <td>{c.customerPhone}</td>
+                  <td className="muted">{c.customerEmail === 'N/A' ? 'Not provided' : c.customerEmail}</td>
+                  <td className="muted">
+                    {c.lastOrderDate 
+                      ? new Date(c.lastOrderDate).toLocaleDateString() 
+                      : "-"
+                    }
+                  </td>
                   <td>{c.totalOrders}</td>
-                  <td>{c.totalSpends}</td>
-                  <td>{c.commissionEarned}</td>
+                  <td>${c.totalSpent.toFixed(2)}</td>
+                  <td>
+                    <span className={`status ${c.status.toLowerCase()}`}>
+                      {c.status}
+                    </span>
+                  </td>
                   <td className="center action-col">
-                    <Link to={`/customers/${c.id}`} className="icon-link eye" title="View">
+                    <Link to={`/customers/${c.customerId}`} className="icon-link eye" title="View">
                       <FiEye />
                     </Link>
-                    <button className="icon-link danger" onClick={() => handleDelete(c.id)}>
+                    <button 
+                      className="icon-link danger" 
+                      onClick={() => handleToggleStatus(c.customerId)}
+                      title={`${c.status === 'Blocked' ? 'Activate' : 'Block'} Customer`}
+                    >
                       <FiTrash2 />
                     </button>
                   </td>
@@ -162,7 +252,7 @@ export default function Customers() {
             ) : (
               <tr>
                 <td colSpan={8} className="center muted">
-                  No matching customers.
+                  {loading ? 'Loading customers...' : 'No customers found.'}
                 </td>
               </tr>
             )}
